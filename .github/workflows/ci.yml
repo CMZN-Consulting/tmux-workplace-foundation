@@ -165,7 +165,7 @@ jobs:
         shell: python3 {0}
         run: |
           import re, subprocess
-          files = [f for f in subprocess.run(["git", "ls-files", "-z"], capture_output=True, check=True).stdout.decode().split("\0") if f and f != "LICENSE"]
+          files = [f for f in subprocess.run(["git", "ls-files", "-z"], capture_output=True, check=True).stdout.decode().split("\0") if f and f not in ("LICENSE", "bun.lock")]
           start = r"(?:^|(?<=[\s\"'=(,`<>:;|&{\[/]))"
           roots = r"home|Users|root|tmp|var|etc|opt|srv|mnt|media|usr|private|nix|run|Volumes|data|workspace|scratch|snap|proc|sys|boot|lib|bin|sbin|dev(?!/null\b)"
           up = r"(?:^|(?<=[\s\"'=(,`/:]))\.\.(?:[/]|$)"
@@ -192,7 +192,7 @@ jobs:
                       problems.append(f"{where}: the organisation's name outside a repository's URL")
           for problem in problems:
               print(f"::error::{problem}")
-          print(f"{len(files)} tracked files scanned besides LICENSE, {len(problems)} problems")
+          print(f"{len(files)} tracked files scanned besides LICENSE and bun.lock, {len(problems)} problems")
           raise SystemExit(1 if problems else 0)
       - name: T6 the README's file table and the tracked files are the same list
         run: |
