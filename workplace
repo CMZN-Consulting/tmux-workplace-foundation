@@ -4,7 +4,7 @@
 set -euo pipefail
 
 frame_url=https://github.com/CMZN-Consulting/tmux-workplace
-frame_commit=886bcaad05d47f874aca0b1a642548d0a679714c
+frame_commit=89fe86af115cfc0322e86f87b967667bfac9f8d2
 
 clone=$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 frame=$clone/frame
