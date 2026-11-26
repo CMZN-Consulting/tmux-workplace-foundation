@@ -1,0 +1,3 @@
+# The frame's layers, copied byte for byte from its pinned commit. They move
+# only with the pin, in one commit that carries the frame's new bytes.
+/config/layers/
