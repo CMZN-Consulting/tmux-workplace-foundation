@@ -1,0 +1,47 @@
+#lang typify
+declare : Structure
+version : 1
+file : programs/STRUCTURE.typify
+required!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : display-name = /[A-Za-z0-9][A-Za-z0-9 _()-]*/
+is : layout = "even-horizontal" | "even-vertical" | "main-horizontal" | "main-vertical" | "tiled"
+cell : sessions = shadow
+primitive : session : office-key display-name
+writes : session : sessions = put 1
+stage : session = 10
+cell : windows = shadow
+primitive : window : office-key room-key display-name
+writes : window : windows = put 2
+stage : window = 20
+cell : panes = shadow
+primitive : pane : office-key room-key seat-key display-name
+writes : pane : panes = put 3
+stage : pane = 30
+cell : arrangements = shadow
+primitive : arrange : office-key room-key layout
+writes : arrange : arrangements = put 2
+stage : arrange = 40
+term : office : office-key display-name
+rule : office <o> <n> -> session <o> <n>
+form : office : <office-key> = <display-name>
+does : office <office-key> <display-name>
+count : office = 1..*
+count : office = 0..1 by 1
+term : room : office-key room-key display-name layout
+rule : room <o> <r> <n> <l> -> window <o> <r> <n> ; arrange <o> <r> <l>
+form : room : <office-key> / <room-key> = <display-name> : <layout>
+does : room <office-key> <room-key> <display-name> <layout>
+count : room = 1..*
+count : room = 0..1 by 2
+ensure : room : office-declared = (bound sessions <1>)
+term : seat : display-name office-key room-key seat-key
+rule : seat <n> <o> <r> <s> -> pane <o> <r> <s> <n>
+form : seat : <display-name> = <office-key> / <room-key> / <seat-key>
+does : seat <display-name> <office-key> <room-key> <seat-key>
+count : seat = 1..*
+count : seat = 0..1 by 1
+ensure : seat : room-declared = (bound windows <2> <3>)
+end!

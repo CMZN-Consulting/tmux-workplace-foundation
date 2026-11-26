@@ -1,0 +1,58 @@
+#lang typify
+declare : Host
+version : 1
+file : ROOT.typify
+required!
+is : workplace-path = canonical-path | relative-path | "."
+is : workplace = /[A-Za-z0-9][A-Za-z0-9_-]*/
+cell : configuration = shadow
+primitive : configure : text text
+writes : configure : configuration = put 1
+effect : configure = state
+term : workdir : canonical-path
+rule : workdir <p> -> configure root <p>
+form : workdir : <canonical-path>
+does : workdir <canonical-path>
+count : workdir = 1
+primitive : server : workplace workplace-path
+effect : server = external
+stage : server = 0
+form : server : <workplace> : <workplace-path>
+does : server <workplace> <workplace-path>
+count : server = 1
+end!
+
+declare : WorkplaceEnvironment
+version : 1
+file : programs/ENVIRONMENT.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : variable = /[A-Za-z_][A-Za-z0-9_]*/
+cell : environment = shadow
+primitive : set-environment : office-key room-key seat-key variable text
+writes : set-environment : environment = put 4
+effect : set-environment = state
+form : environment : <office-key>/<room-key>/<seat-key> : <variable> = <text>
+does : set-environment <office-key> <room-key> <seat-key> <variable> <text>
+end!
+
+declare : Start
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/run/START.typify
+required!
+is : workplace-path = canonical-path | relative-path | "."
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : argv = /\[.+\]/
+cell : panes = shadow
+primitive : start : office-key room-key seat-key workplace-path argv
+effect : start = external
+stage : start = 50
+form : command : <argv>
+does : start <office-key> <room-key> <seat-key> (context Directories.directory) <argv>
+count : start = 1
+ensure : start : seat-declared = (bound panes <office-key> <room-key> <seat-key>)
+end!

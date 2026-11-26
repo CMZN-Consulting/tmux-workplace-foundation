@@ -1,0 +1,4 @@
+office : home = Home
+room : home / main = Main : even-horizontal
+seat : Left = home / main / left
+seat : Right = home / main / right

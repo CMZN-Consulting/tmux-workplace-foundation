@@ -1,0 +1,7 @@
+{
+  "layers": [
+    "layers/Structure.typify",
+    "layers/Agents.typify",
+    "layers/Host.typify"
+  ]
+}
