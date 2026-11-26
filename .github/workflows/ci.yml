@@ -1,0 +1,331 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  start:
+    name: T1 the start on tmux ${{ matrix.version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: "3.5a"
+            sha256: 16216bd0877170dfcc64157085ba9013610b12b082548c7c9542cc0103198951
+          - version: "3.8"
+            sha256: e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config bison libevent-dev libncurses-dev jq
+      - name: tmux ${{ matrix.version }} from its release archive
+        env:
+          TMUX_VERSION: ${{ matrix.version }}
+          TMUX_SHA256: ${{ matrix.sha256 }}
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL -o tmux.tar.gz "https://github.com/tmux/tmux/releases/download/$TMUX_VERSION/tmux-$TMUX_VERSION.tar.gz"
+          printf '%s  %s\n' "$TMUX_SHA256" tmux.tar.gz | sha256sum --check --strict
+          tar -xzf tmux.tar.gz
+          cd "tmux-$TMUX_VERSION"
+          ./configure --prefix="$RUNNER_TEMP/tmux"
+          make -j"$(nproc)"
+          make install
+          echo "$RUNNER_TEMP/tmux/bin" >> "$GITHUB_PATH"
+      - name: A fresh clone
+        run: |
+          git switch --quiet -c start-under-test
+          git clone --quiet "$GITHUB_WORKSPACE" "$RUNNER_TEMP/fresh"
+      - name: The reader, by the README's download commands
+        working-directory: ${{ runner.temp }}/fresh
+        run: |
+          python3 - <<'EOF' > "$RUNNER_TEMP/install.sh"
+          import re
+          lines = open("README.md", encoding="utf-8").read().split("\n")
+          blocks, i = [], 0
+          while i < len(lines):
+              if lines[i].startswith("```"):
+                  j = i + 1
+                  while not lines[j].startswith("```"):
+                      j += 1
+                  if lines[i][3:].strip() == "sh":
+                      blocks.append("\n".join(lines[i + 1 : j]))
+                  i = j
+              i += 1
+          found = [b for b in blocks if "/releases/download/" in b]
+          if len(found) != 1:
+              raise SystemExit(f"the README holds {len(found)} download blocks, not one")
+          print(found[0])
+          EOF
+          bash -euo pipefail "$RUNNER_TEMP/install.sh"
+          echo "$PWD/reader/typify/bin" >> "$GITHUB_PATH"
+      - name: F1 plan
+        working-directory: ${{ runner.temp }}/fresh
+        run: ./workplace plan
+      - name: F1 build
+        working-directory: ${{ runner.temp }}/fresh
+        run: ./workplace build
+      - name: F1 up
+        working-directory: ${{ runner.temp }}/fresh
+        run: ./workplace up
+      - name: F1 status shows the two seats in their room
+        working-directory: ${{ runner.temp }}/fresh
+        run: |
+          tmux -V
+          ./workplace status | tee "$RUNNER_TEMP/status.txt"
+          for line in 'ok      session/home' 'ok      seat/Left' 'ok      seat/Right'; do
+            grep -qxF "$line" "$RUNNER_TEMP/status.txt" || { echo "::error::status does not show: $line"; exit 1; }
+          done
+          socket=$(find config/BUILD/RUN -maxdepth 1 -type s | head -n 1)
+          tmux -S "$socket" list-panes -a -F '#{window_name}' | tee "$RUNNER_TEMP/panes.txt"
+          test "$(grep -cxF Main "$RUNNER_TEMP/panes.txt")" = 2 || { echo "::error::the room Main does not hold two seats"; exit 1; }
+      - name: F1 down
+        working-directory: ${{ runner.temp }}/fresh
+        run: ./workplace down
+      - name: F1 unbuild
+        working-directory: ${{ runner.temp }}/fresh
+        run: ./workplace unbuild
+      - name: F1 the clone is as git had it
+        working-directory: ${{ runner.temp }}/fresh
+        run: |
+          git status --porcelain | tee "$RUNNER_TEMP/porcelain.txt"
+          test ! -s "$RUNNER_TEMP/porcelain.txt" || { echo "::error::the clone differs from what git holds"; exit 1; }
+          test ! -e config/BUILD || { echo "::error::config/BUILD is still there"; exit 1; }
+
+  pins:
+    name: T2 the layers and the frame's version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: The launcher fetches the frame at its pin
+        run: |
+          ./workplace help > /dev/null
+          pin=$(sed -n 's/^frame_commit=//p' workplace)
+          test "$(git -C frame rev-parse HEAD)" = "$pin" || { echo "::error::frame/ is not at the pin $pin"; exit 1; }
+      - name: F2 config/layers equals the frame's layers at the pin
+        run: |
+          test "$(ls config/layers | wc -l)" = 3
+          for file in config/layers/*; do
+            cmp "$file" "frame/layers/${file##*/}" || { echo "::error::$file differs from the frame's"; exit 1; }
+          done
+      - name: F3 the launcher refuses a frame at another commit
+        run: |
+          pin=$(sed -n 's/^frame_commit=//p' workplace)
+          git -C frame -c advice.detachedHead=false checkout --quiet "$pin~1"
+          other=$(git -C frame rev-parse HEAD)
+          set +e
+          ./workplace plan 2> "$RUNNER_TEMP/refusal.txt"
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/refusal.txt"
+          test "$status" = 2 || { echo "::error::the launcher exited $status, not 2"; exit 1; }
+          grep -qF "$pin" "$RUNNER_TEMP/refusal.txt" && grep -qF "$other" "$RUNNER_TEMP/refusal.txt" || { echo "::error::the refusal does not name both commits"; exit 1; }
+          git -C frame -c advice.detachedHead=false checkout --quiet "$pin"
+      - name: F3 the launcher refuses a frame with changes of its own
+        run: |
+          pin=$(sed -n 's/^frame_commit=//p' workplace)
+          printf '\n' >> frame/README.md
+          set +e
+          ./workplace plan 2> "$RUNNER_TEMP/refusal.txt"
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/refusal.txt"
+          git -C frame checkout --quiet -- README.md
+          test "$status" = 2 || { echo "::error::the launcher exited $status, not 2"; exit 1; }
+          grep -qF "has changes of its own" "$RUNNER_TEMP/refusal.txt" && grep -qF "$pin" "$RUNNER_TEMP/refusal.txt" || { echo "::error::the refusal does not say that the frame has changes, or does not name the pin"; exit 1; }
+
+  scan:
+    name: T3 no path outside the clone, and T6 the README's file list
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: F5 no path outside the clone, no e-mail address, no other owner's repository, the organisation only in its URLs
+        shell: python3 {0}
+        run: |
+          import re, subprocess
+          files = [f for f in subprocess.run(["git", "ls-files", "-z"], capture_output=True, check=True).stdout.decode().split("\0") if f and f != "LICENSE"]
+          start = r"(?:^|(?<=[\s\"'=(,`<>:;|&{\[/]))"
+          roots = r"home|Users|root|tmp|var|etc|opt|srv|mnt|media|usr|private|nix|run|Volumes|data|workspace|scratch|snap|proc|sys|boot|lib|bin|sbin|dev(?!/null\b)"
+          up = r"(?:^|(?<=[\s\"'=(,`/:]))\.\.(?:[/]|$)"
+          outside = re.compile(start + r"/(?:" + roots + r")/|~[\w.-]*[/]|\$H[O]ME\b|\$\{H[O]ME\}|" + up + r"|\b[A-Za-z]:\\")
+          address = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+          owners = {"cm" + "zn-consulting", "tmux", "actions", "oven-sh"}
+          owner_ref = re.compile(r"(?:github\.com/|raw\.githubusercontent\.com/|gitlab\.com/|codeberg\.org/|bitbucket\.org/|github:|uses: )([\w.-]+)/", re.I)
+          org = "cm" + "zn"
+          allowed_org = re.compile(r"(?:https://github\.com/|github:)" + org + r"-consulting/[\w.-]+|@" + org + r"-consulting/formatter", re.I)
+          problems = []
+          for name in files:
+              for number, line in enumerate(open(name, encoding="utf-8", errors="replace").read().split("\n"), 1):
+                  where = f"{name}:{number}"
+                  if number == 1 and line.startswith("#!/usr/bin/env "):
+                      line = ""
+                  if outside.search(line):
+                      problems.append(f"{where}: a path outside the clone: {line.strip()}")
+                  if address.search(re.sub(r"@[0-9a-f]{40}\b", "", line)):
+                      problems.append(f"{where}: an address: {line.strip()}")
+                  for owner in owner_ref.findall(line):
+                      if owner.lower() not in owners:
+                          problems.append(f"{where}: a repository of {owner}")
+                  if org in allowed_org.sub("", line).lower():
+                      problems.append(f"{where}: the organisation's name outside a repository's URL")
+          for problem in problems:
+              print(f"::error::{problem}")
+          print(f"{len(files)} tracked files scanned besides LICENSE, {len(problems)} problems")
+          raise SystemExit(1 if problems else 0)
+      - name: T6 the README's file table and the tracked files are the same list
+        run: |
+          git ls-files | sort > "$RUNNER_TEMP/tracked.txt"
+          sed -n 's/^| `\([^`]*\)` *|.*/\1/p' README.md | sort > "$RUNNER_TEMP/listed.txt"
+          diff "$RUNNER_TEMP/listed.txt" "$RUNNER_TEMP/tracked.txt" || { echo "::error::the README's file table (left) and git ls-files (right) differ"; exit 1; }
+
+  readme:
+    name: T4 the README's commands, in order
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config bison libevent-dev libncurses-dev jq
+      - name: tmux 3.8 from its release archive
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL -o tmux.tar.gz https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.gz
+          printf '%s  %s\n' e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e tmux.tar.gz | sha256sum --check --strict
+          tar -xzf tmux.tar.gz
+          cd tmux-3.8
+          ./configure --prefix="$RUNNER_TEMP/tmux"
+          make -j"$(nproc)"
+          make install
+          echo "$RUNNER_TEMP/tmux/bin" >> "$GITHUB_PATH"
+      - name: The README's clone command reaches this checkout
+        run: |
+          git switch --quiet -c readme-under-test
+          git config --global url."$GITHUB_WORKSPACE".insteadOf https://github.com/CMZN-Consulting/tmux-workplace-foundation
+      - name: F4 every command block, in order, with the checks of each section
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir readme
+          python3 - "$GITHUB_WORKSPACE/README.md" <<'EOF' > readme.sh
+          import re, shlex, sys
+          lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
+          heading, sections, i = None, [], 0
+          while i < len(lines):
+              line = lines[i]
+              match = re.match(r"#{1,6} (.*)$", line)
+              if match:
+                  heading = match.group(1)
+              elif line.startswith("```"):
+                  j = i + 1
+                  while not lines[j].startswith("```"):
+                      j += 1
+                  if line[3:].strip() == "sh":
+                      if not sections or sections[-1][0] != heading:
+                          sections.append((heading, []))
+                      sections[-1][1].append("\n".join(lines[i + 1 : j]))
+                  i = j
+              i += 1
+          print("set -euo pipefail")
+          for heading, blocks in sections:
+              print(f"echo '::group::README: {heading}'")
+              for block in blocks:
+                  print(block)
+              print(f"after_section {shlex.quote(heading)}")
+              print("echo '::endgroup::'")
+          print(f"test {len(sections)} = 5 || {{ echo '::error::the README has {len(sections)} sections with commands, not 5'; exit 1; }}")
+          EOF
+          cat > checks.sh <<'EOF'
+          unset TMUX TMUX_PANE
+          fail() { echo "::error::T4 ($section): $1"; exit 1; }
+          shows() {
+            ./workplace status > "$RUNNER_TEMP/status.txt" || { cat "$RUNNER_TEMP/status.txt"; fail "status exits non-zero"; }
+            for line in "$@"; do grep -qxF "$line" "$RUNNER_TEMP/status.txt" || { cat "$RUNNER_TEMP/status.txt"; fail "status does not show: $line"; }; done
+          }
+          panes() {
+            local socket format=${1:-}
+            [[ -n $format ]] || format='#{window_name} #{pane_current_command}'
+            socket=$(find config/BUILD/RUN -maxdepth 1 -type s | head -n 1)
+            tmux -S "$socket" list-panes -a -F "$format"
+          }
+          count() { test "$(panes | grep -c "^$1 ")" = "$2" || { panes; fail "the room $1 does not hold $2 seats"; }; }
+          after_section() {
+            section=$1
+            case $section in
+              "The start")
+                shows 'ok      session/home' 'ok      seat/Left' 'ok      seat/Right'
+                grep -q '^attach  tmux -S .* attach$' "$RUNNER_TEMP/status.txt" || fail "status shows no attach line"
+                count Main 2 ;;
+              "A third seat")
+                shows 'ok      seat/Left' 'ok      seat/Right' 'ok      seat/Middle'
+                count Main 3 ;;
+              "Another command for a seat")
+                shows 'ok      seat/Right'
+                for _ in $(seq 50); do panes | grep -qx 'Main top' && break; sleep 0.2; done
+                panes | grep -qx 'Main top' || { panes; fail "no seat of Main runs top"; } ;;
+              "A second room")
+                shows 'ok      seat/Left' 'ok      seat/Right' 'ok      seat/Middle'
+                count Main 2
+                count Side 1
+                panes '#{window_name} #{pane_title}' | grep -qx 'Side Middle' || { panes '#{window_name} #{pane_title}'; fail "Middle is not the seat in Side"; } ;;
+              "The stop")
+                test ! -e config/BUILD || fail "config/BUILD is still there" ;;
+              *) fail "this workflow has no check for this section" ;;
+            esac
+          }
+          EOF
+          cd readme
+          bash -c 'source "$RUNNER_TEMP/checks.sh"; source "$RUNNER_TEMP/readme.sh"'
+
+  layout:
+    name: T5 the formatter
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: F6 package.json holds the formatter's lines
+        run: |
+          expected='{"private":true,"scripts":{"format":"formatter write","format:check":"formatter check"},"devDependencies":{"@cmzn-consulting/formatter":"github:CMZN-Consulting/formatter#v0.1.0"}}'
+          test "$(jq -cS . package.json)" = "$(jq -cS . <<< "$expected")" || { echo "::error::package.json is not the formatter's lines"; exit 1; }
+      - name: F6 .formatterignore keeps config/layers with its reason
+        run: |
+          grep -n . .formatterignore
+          line=$(grep -nxF /config/layers/ .formatterignore | cut -d: -f1 || true)
+          test -n "$line" && test "$line" -gt 1 || { echo "::error::.formatterignore does not name /config/layers/ below a reason"; exit 1; }
+          sed -n "$((line - 1))p" .formatterignore | grep -q '^#' || { echo "::error::the line above /config/layers/ gives no reason"; exit 1; }
+      - name: F6 bun.lock is tracked
+        run: git ls-files --error-unmatch bun.lock || { echo "::error::bun.lock is not tracked, so the install below would not be frozen"; exit 1; }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: "latest"
+      - name: F6 format:check exits 0 after a frozen install
+        run: |
+          bun install --frozen-lockfile
+          bun run format:check
