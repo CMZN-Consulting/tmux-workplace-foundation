@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Runs the pinned Tmux Workplace frame on this clone.
+# Usage: ./workplace COMMAND [ARGUMENT ...], for example ./workplace plan.
+set -euo pipefail
+
+frame_url=https://github.com/CMZN-Consulting/tmux-workplace
+frame_commit=886bcaad05d47f874aca0b1a642548d0a679714c
+
+clone=$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+frame=$clone/frame
+
+if [[ ! -e $frame ]]; then
+  partial=$clone/frame.partial
+  rm -rf -- "$partial"
+  git clone --quiet -- "$frame_url" "$partial"
+  git -C "$partial" -c advice.detachedHead=false checkout --quiet "$frame_commit"
+  mv -- "$partial" "$frame"
+fi
+
+head=$(git -C "$frame" rev-parse --verify HEAD)
+if [[ $head != "$frame_commit" ]]; then
+  printf 'workplace: the frame in %s is at %s, but this clone pins %s\n' \
+    "$frame" "$head" "$frame_commit" >&2
+  exit 2
+fi
+if ! git -C "$frame" diff --quiet HEAD --; then
+  printf 'workplace: the frame in %s has changes of its own; this clone pins %s as it is\n' \
+    "$frame" "$frame_commit" >&2
+  exit 2
+fi
+
+export WORKPLACE_ROOT=$clone
+export WORKPLACE_CONFIG=$clone/config
+exec "$frame/bin/workplace" "$@"
