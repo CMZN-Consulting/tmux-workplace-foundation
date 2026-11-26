@@ -4,5 +4,7 @@
 # The frame that ./workplace fetches at its pinned commit.
 /frame/
 /frame.partial/
+# The reader that the README downloads.
+/reader/
 # The formatter and its tools, installed by bun install.
 /node_modules/
